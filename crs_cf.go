@@ -26,6 +26,16 @@ func CRSFromCF(attrs map[string]any) (*CRS, error) {
 			return ParseCRS(s)
 		}
 	}
+	c, err := crsFromCFParams(attrs)
+	if err != nil {
+		return nil, err
+	}
+	c.cf = attrs
+	return c, nil
+}
+
+// crsFromCFParams reads a grid mapping's grid_mapping_name and parameters.
+func crsFromCFParams(attrs map[string]any) (*CRS, error) {
 	gm, ok := attrs["grid_mapping_name"].(string)
 	if !ok {
 		return nil, fmt.Errorf("geozarr: CF projection parameters missing 'grid_mapping_name'")

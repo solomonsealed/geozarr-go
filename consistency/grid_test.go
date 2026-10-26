@@ -288,7 +288,7 @@ func (g gridGen) dataset() *gridCase {
 	// The cell size, the grid's size and centre.
 	height, width := 1+g.pick(9), 1+g.pick(9)
 	degrees := c.crs == nil || c.crs.IsGeographic() || c.crs.IsRotated()
-	res := []float64{10, 30, 250, 1000, 5000, 20000, 3 + g.r.Float64()*1e4}[g.pick(7)]
+	res := []float64{10, 30, 250, 1000, 5000, 20000, 3 + float64(g.r.Float64()*1e4)}[g.pick(7)]
 	if degrees {
 		res = []float64{0.25, 0.1, 1.0 / 120, 1, 0.001 + g.r.Float64()}[g.pick(5)]
 	}
@@ -304,30 +304,30 @@ func (g gridGen) dataset() *gridCase {
 	}
 	var cx, cy float64
 	for range 20 {
-		lon := c.region[0] + g.r.Float64()*(c.region[2]-c.region[0])
-		lat := c.region[1] + g.r.Float64()*(c.region[3]-c.region[1])
+		lon := c.region[0] + float64(g.r.Float64()*(c.region[2]-c.region[0]))
+		lat := c.region[1] + float64(g.r.Float64()*(c.region[3]-c.region[1]))
 		if c.crs == nil {
 			cx, cy = lon, lat
 			break
 		}
 		x, y, err := c.crs.Forward(lon, lat)
 		if err == nil {
-			cx, cy = x, y
+			cx, cy = fixed(x), fixed(y)
 			break
 		}
 	}
-	x0 := cx - float64(width-1)/2*dx
-	y0 := cy - float64(height-1)/2*dy
+	x0 := cx - float64(float64(width-1)/2*dx)
+	y0 := cy - float64(float64(height-1)/2*dy)
 	xs, ys := make([]float64, width), make([]float64, height)
 	for i := range xs {
-		xs[i] = x0 + float64(i)*dx
+		xs[i] = x0 + float64(float64(i)*dx)
 	}
 	for i := range ys {
-		ys[i] = y0 + float64(i)*dy
+		ys[i] = y0 + float64(float64(i)*dy)
 	}
 	if g.chance(0.1) {
 		// Irregular coordinates.
-		xs[len(xs)-1] += dx * 0.3
+		xs[len(xs)-1] += float64(dx * 0.3)
 	}
 	c.extent = []float64{math.Min(xs[0], xs[width-1]) - math.Abs(dx)/2, math.Min(ys[0], ys[height-1]) - math.Abs(dy)/2, math.Max(xs[0], xs[width-1]) + math.Abs(dx)/2, math.Max(ys[0], ys[height-1]) + math.Abs(dy)/2}
 
@@ -403,7 +403,7 @@ func (g gridGen) dataset() *gridCase {
 	// The stored transform.
 	corner := geozarr.Affine{dx, 0, x0 - dx/2, 0, dy, y0 - dy/2}
 	if g.chance(0.15) {
-		corner[2] += dx * (g.r.Float64() - 0.5)
+		corner[2] += float64(dx * (g.r.Float64() - 0.5))
 	}
 	if g.chance(0.08) {
 		corner[1] = dx * 0.1
@@ -468,6 +468,27 @@ func (g gridGen) dataset() *gridCase {
 
 func newRand(seed int64) *rand.Rand { return rand.New(rand.NewSource(seed)) }
 
+// The generators must make the same cases on every architecture, as the
+// recordings are looked up by request: Go may fuse x*y+z into one
+// instruction on arm64 and not on amd64 (an explicit float64 conversion
+// stops it), and math functions such as Log and Exp differ in their last
+// bits.
+
+// fixed rounds a coordinate Go projected to 2^-20 of a unit, for the
+// cases it makes: projections' last bits differ by architecture.
+func fixed(x float64) float64 { return math.Round(x*(1<<20)) / (1 << 20) }
+
+// normal returns a roughly normal deviate (twelve uniforms summed, less
+// 6), from additions only, so the same on every architecture (rand's
+// NormFloat64 calls math.Log and math.Exp).
+func normal(r *rand.Rand) float64 {
+	s := 0.0
+	for range 12 {
+		s += r.Float64()
+	}
+	return s - 6
+}
+
 func orEmpty(m map[string]any) map[string]any {
 	if m == nil {
 		return map[string]any{}
@@ -524,6 +545,8 @@ func TestGrids(t *testing.T) {
 	for i := range cases(o, 400) {
 		c := g.dataset()
 		path := fmt.Sprintf("out/grid/%d", i)
+		failed := t.Failed()
+		defer keepFailed(t, o, path, failed)
 		store := gridStore(t, o, c, path)
 		label := fmt.Sprintf("case %d (%s)", i, path)
 		ds, err := geozarr.Open(ctx, geozarr.StoreSource(store), "")
@@ -640,7 +663,7 @@ func (g gridGen) clip(t *testing.T, o *oracle, c *gridCase, grid *geozarr.Grid, 
 		var lons, lats []float64
 		for _, p := range [][2]float64{{c.extent[0], c.extent[1]}, {c.extent[2], c.extent[3]}, {c.extent[0], c.extent[3]}, {c.extent[2], c.extent[1]}} {
 			if lon, lat, err := c.crs.Inverse(p[0], p[1]); err == nil {
-				lons, lats = append(lons, lon), append(lats, lat)
+				lons, lats = append(lons, fixed(lon)), append(lats, fixed(lat))
 			}
 		}
 		if len(lons) == 0 {
@@ -740,8 +763,8 @@ func pyMinMax(xs, ys []float64) (float64, float64, float64, float64) {
 func (g gridGen) around(w, s, e, n float64) []float64 {
 	edge := func(lo, hi float64) (float64, float64) {
 		span := hi - lo
-		a := lo + span*(g.r.Float64()*1.4-0.3)
-		b := a + span*(g.r.Float64()*1.4-0.2)
+		a := lo + float64(span*(float64(g.r.Float64()*1.4)-0.3))
+		b := a + float64(span*(float64(g.r.Float64()*1.4)-0.2))
 		if g.chance(0.1) {
 			// Exactly on cell edges.
 			a, b = lo, hi
@@ -770,7 +793,7 @@ func TestTransformBounds(t *testing.T) {
 			var xs, ys []float64
 			for _, p := range [][2]float64{{w, s}, {e, n}, {w, n}, {e, s}, {(w + e) / 2, (s + n) / 2}} {
 				if x, y, err := src.Forward(p[0], p[1]); err == nil {
-					xs, ys = append(xs, x), append(ys, y)
+					xs, ys = append(xs, fixed(x)), append(ys, fixed(y))
 				}
 			}
 			w, s, e, n = pyMinMax(xs, ys)
@@ -780,7 +803,7 @@ func TestTransformBounds(t *testing.T) {
 			box[1], box[3] = math.Max(box[1], -90), math.Min(box[3], 90)
 			if g.chance(0.1) {
 				// Across the antimeridian.
-				box[0], box[2] = 150+g.r.Float64()*29, -179+g.r.Float64()*29
+				box[0], box[2] = 150+float64(g.r.Float64()*29), -179+float64(g.r.Float64()*29)
 			}
 		}
 		var py pyResult
@@ -830,8 +853,8 @@ func TestRowCol(t *testing.T) {
 	g := gridGen{cfGridGen{gen{newRand(seed(o, 9))}}}
 	var compared int
 	for i := range cases(o, 200) {
-		res := math.Pow(10, g.r.Float64()*8-3)
-		tr := geozarr.Affine{res, 0, g.r.Float64()*2e6 - 1e6, 0, -res * (0.5 + g.r.Float64()), g.r.Float64()*2e6 - 1e6}
+		res := math.Pow(10, float64(g.pick(8)-3)) * (1 + float64(g.r.Float64()*9))
+		tr := geozarr.Affine{res, 0, float64(g.r.Float64()*2e6) - 1e6, 0, -res * (0.5 + g.r.Float64()), float64(g.r.Float64()*2e6) - 1e6}
 		rotated := g.chance(0.3)
 		if rotated {
 			tr[1], tr[3] = res*(g.r.Float64()-0.5), res*(g.r.Float64()-0.5)
@@ -839,7 +862,7 @@ func TestRowCol(t *testing.T) {
 		var xs, ys []any
 		var px, py []float64
 		for range 8 {
-			x, y := tr.Apply(g.r.Float64()*2000-500, g.r.Float64()*2000-500)
+			x, y := tr.Apply(float64(g.r.Float64()*2000)-500, float64(g.r.Float64()*2000)-500)
 			xs, ys = append(xs, pyFloat(x)), append(ys, pyFloat(y))
 			px, py = append(px, x), append(py, y)
 		}

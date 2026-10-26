@@ -2,6 +2,7 @@ package geozarr_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	geozarr "github.com/solomonsealed/geozarr-go"
@@ -83,4 +84,56 @@ func ExampleDataset_Sel() {
 	// Output:
 	// {1 3 1} 1
 	// [2]
+}
+
+// A dataset written as xarray's to_zarr writes it, with its CRS recorded as
+// rioxarray's write_crs records it, then a multiscales pyramid of it.
+func ExampleWrite() {
+	ctx := context.Background()
+	x, _ := zarr.FromSlice([]uint64{4}, []float64{500005, 500015, 500025, 500035})
+	y, _ := zarr.FromSlice([]uint64{2}, []float64{4999995, 4999985})
+	b02, _ := zarr.FromSlice([]uint64{2, 4}, []float64{0.1, 0.12, 0.09, 0.11, 0.1, 0.13, 0.12, 0.08})
+	ds := &geozarr.DatasetSpec{
+		Attrs: geozarr.NewAttrs("title", "Sentinel-2 B02"),
+		Variables: []*geozarr.VariableSpec{
+			{Name: "x", Dims: []string{"x"}, Data: &geozarr.Data{Values: x}},
+			{Name: "y", Dims: []string{"y"}, Data: &geozarr.Data{Values: y}},
+			{Name: "b02", Dims: []string{"y", "x"}, Data: &geozarr.Data{Values: b02},
+				Encoding: map[string]any{"dtype": "uint16", "scale_factor": 0.0001, "_FillValue": 0}},
+		},
+	}
+	utm, _ := geozarr.CRSFromCode("EPSG:32633")
+	if err := ds.WriteCRS(utm, nil); err != nil {
+		panic(err)
+	}
+	store := zarr.NewMemoryStore()
+	if err := geozarr.Write(ctx, store, "", ds, nil); err != nil {
+		panic(err)
+	}
+	b, _, _ := store.Get(ctx, "b02/zarr.json", zarr.ByteRange{})
+	var doc struct {
+		DataType   string         `json:"data_type"`
+		Attributes map[string]any `json:"attributes"`
+	}
+	json.Unmarshal(b, &doc)
+	fmt.Println(doc.DataType, doc.Attributes["scale_factor"], doc.Attributes["grid_mapping"])
+
+	p, err := geozarr.BuildPyramid(ds, &geozarr.PyramidOptions{Levels: 2, Resampling: "average"})
+	if err != nil {
+		panic(err)
+	}
+	if err := p.Write(ctx, zarr.NewMemoryStore(), "", nil); err != nil {
+		panic(err)
+	}
+	m, err := geozarr.ReadMultiscales(p.Attrs.Map()) // the levels laid out
+	if err != nil {
+		panic(err)
+	}
+	for _, l := range m.Layout {
+		fmt.Println(l.Asset, l.Spatial.Shape, l.Spatial.Transform)
+	}
+	// Output:
+	// uint16 0.0001 spatial_ref
+	// 0 [2 4] [10 0 500000 0 -10 5e+06]
+	// 1 [1 2] [20 0 500000 0 -20 5e+06]
 }

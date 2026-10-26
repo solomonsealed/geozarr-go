@@ -69,7 +69,7 @@ func (g gen) scalar() any {
 	case 2:
 		return num(fmt.Sprint(g.r.Intn(7) - 2))
 	case 3:
-		return num(fmt.Sprintf("%.1f", g.r.Float64()*10-3))
+		return num(fmt.Sprintf("%.1f", float64(g.r.Float64()*10)-3))
 	case 4:
 		return []any{}
 	case 5:
@@ -93,7 +93,7 @@ func (g gen) numbers(n int, ints bool) []any {
 		case g.chance(0.3):
 			out[i] = num(fmt.Sprint(g.r.Intn(2000) - 1000))
 		default:
-			out[i] = num(fmt.Sprintf("%.3f", g.r.Float64()*2000-1000))
+			out[i] = num(fmt.Sprintf("%.3f", float64(g.r.Float64()*2000)-1000))
 		}
 	}
 	if n > 0 && g.chance(0.12) {
@@ -610,4 +610,56 @@ func TestConventionAttributes(t *testing.T) {
 		}
 	}
 	count("attribute operations", ops)
+}
+
+// shuffled returns m's entries in a random order.
+func (g gen) shuffled(m map[string]any) geozarr.Attrs {
+	a := geozarr.AttrsOf(m)
+	g.r.Shuffle(len(a), func(i, j int) { a[i], a[j] = a[j], a[i] })
+	return a
+}
+
+func TestConventionInsertOrdered(t *testing.T) {
+	o := pythonOracle(t)
+	g := gen{rand.New(rand.NewSource(seed(o, 13)))}
+	var ops int
+	for i := range cases(o, 600) {
+		c := conventions[g.pick(len(conventions))]
+		revs := append([]string{""}, c.Revisions()...)
+		rev := revs[g.pick(len(revs))]
+		attrs := g.shuffled(g.attributes())
+		data := map[string]any{}
+		switch c.Name {
+		case "proj":
+			g.proj(data)
+		case "spatial":
+			g.spatial(data)
+		default:
+			g.multiscales(data)
+		}
+		dataAttrs := g.shuffled(data)
+		overwrite := g.chance(0.3)
+		got, goErr := c.InsertAttrs(attrs, dataAttrs, rev, overwrite)
+		at, _ := attrs.MarshalJSON()
+		dt, _ := dataAttrs.MarshalJSON()
+		req := map[string]any{"convention": c.Name, "attrs": string(at), "data": string(dt), "overwrite": overwrite}
+		if rev != "" {
+			req["revision"] = rev
+		}
+		var want string
+		pyErr := o.call("cm_insert_ordered", req, &want)
+		label := fmt.Sprintf("case %d: %s %q insert %s into %s", i, c.Name, rev, dt, at)
+		if !agree(t, label, goErr, pyErr) || goErr != nil {
+			continue
+		}
+		gt, err := got.MarshalJSON()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(gt) != want {
+			t.Errorf("%s:\nGo     %s\nPython %s", label, gt, want)
+		}
+		ops++
+	}
+	count("ordered inserts", ops)
 }

@@ -131,7 +131,21 @@ func (s *Spatial) IsZero() bool {
 }
 
 // Data returns s as convention data, with only the properties set.
-func (s Spatial) Data() map[string]any {
+func (s Spatial) Data() map[string]any { return s.dataUnordered() }
+
+// Attrs returns s as convention data in zarr-cm's key order.
+func (s Spatial) Attrs() Attrs {
+	m := s.dataUnordered()
+	var out Attrs
+	for _, k := range spatialKeys {
+		if v, ok := m[k]; ok {
+			out = append(out, Attr{k, v})
+		}
+	}
+	return out
+}
+
+func (s Spatial) dataUnordered() map[string]any {
 	out := map[string]any{}
 	if s.Dimensions != nil {
 		out["spatial:dimensions"] = toAnySlice(s.Dimensions)

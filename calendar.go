@@ -253,6 +253,10 @@ func (d *Date) fromDayNumber(n int64) {
 
 const usPerDay = 86400 * 1000000
 
+// AddMicroseconds returns d plus us microseconds in its calendar, as
+// adding a timedelta to a cftime date does.
+func (d Date) AddMicroseconds(us int64) Date { return d.addMicroseconds(us) }
+
 // addMicroseconds returns d plus us microseconds, as adding a timedelta
 // to a cftime date does.
 func (d Date) addMicroseconds(us int64) Date {
@@ -385,13 +389,13 @@ func cftimeMicroseconds(v float64, factor int64) (int64, error) {
 	if x < math.MinInt64 || x > math.MaxInt64 {
 		return 0, fmt.Errorf("geozarr: time values outside range of 64 bit signed integers")
 	}
-	n := int64(math.RoundToEven(x))
+	n := castInt64(math.RoundToEven(x))
 	if factor > 1000 {
 		switch floorMod(n, 1000000) {
 		case 1:
-			n = int64(math.Floor(x))
+			n = castInt64(math.Floor(x))
 		case 999999:
-			n = int64(math.Ceil(x))
+			n = castInt64(math.Ceil(x))
 		}
 	}
 	return n, nil

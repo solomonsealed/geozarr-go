@@ -173,7 +173,7 @@ func (g cfGen) value(dt string, special []float64) float64 {
 		case 2:
 			return float64(g.r.Intn(200) - 100)
 		}
-		return g.r.NormFloat64() * math.Pow(10, float64(g.pick(8)-3))
+		return normal(g.r) * math.Pow(10, float64(g.pick(8)-3))
 	}
 	lo, hi := intRange(dt)
 	switch g.pick(6) {
@@ -222,23 +222,22 @@ func array(dt string, shape []uint64, vals []float64) *zarr.NDArray {
 			if v != 0 {
 				b[0] = 1
 			}
-		case "int8", "uint8":
-			b[0] = byte(int64(v))
-			if dt == "uint8" {
-				b[0] = byte(uint64(v))
-			}
+		case "int8":
+			b[0] = byte(satInt64(v))
+		case "uint8":
+			b[0] = byte(satUint64(v))
 		case "int16":
-			binary.LittleEndian.PutUint16(b, uint16(int16(v)))
+			binary.LittleEndian.PutUint16(b, uint16(satInt64(v)))
 		case "uint16":
-			binary.LittleEndian.PutUint16(b, uint16(v))
+			binary.LittleEndian.PutUint16(b, uint16(satUint64(v)))
 		case "int32":
-			binary.LittleEndian.PutUint32(b, uint32(int32(v)))
+			binary.LittleEndian.PutUint32(b, uint32(satInt64(v)))
 		case "uint32":
-			binary.LittleEndian.PutUint32(b, uint32(v))
+			binary.LittleEndian.PutUint32(b, uint32(satUint64(v)))
 		case "int64":
-			binary.LittleEndian.PutUint64(b, uint64(int64(v)))
+			binary.LittleEndian.PutUint64(b, uint64(satInt64(v)))
 		case "uint64":
-			binary.LittleEndian.PutUint64(b, uint64(v))
+			binary.LittleEndian.PutUint64(b, satUint64(v))
 		case "float16":
 			binary.LittleEndian.PutUint16(b, float16Bits(v))
 		case "float32":
@@ -295,6 +294,31 @@ func pyFloat(f float64) any {
 }
 
 func pyInt(v int64) any { return num(fmt.Sprint(v)) }
+
+// satInt64 and satUint64 convert f to an integer, saturating (NaN to 0):
+// Go's conversions of floats out of range differ by architecture (arm64
+// saturates, amd64 does not).
+func satInt64(f float64) int64 {
+	switch {
+	case math.IsNaN(f):
+		return 0
+	case f >= math.MaxInt64:
+		return math.MaxInt64
+	case f <= math.MinInt64:
+		return math.MinInt64
+	}
+	return int64(f)
+}
+
+func satUint64(f float64) uint64 {
+	switch {
+	case !(f > 0):
+		return 0
+	case f >= math.MaxUint64:
+		return math.MaxUint64
+	}
+	return uint64(f)
+}
 
 var timeUnits = []string{
 	"days since 2000-01-01", "hours since 1970-01-01 00:00:00", "seconds since 1970-01-01T00:00:00Z",
@@ -391,7 +415,7 @@ func (g cfGen) caseOf() cfCase {
 		case isFloat || g.chance(0.2) || math.IsNaN(f):
 			set("_FillValue", f, pyFloat(f))
 		default:
-			set("_FillValue", int64(f), pyInt(int64(f)))
+			set("_FillValue", satInt64(f), pyInt(satInt64(f)))
 		}
 	}
 	if g.chance(0.2) {
@@ -399,7 +423,7 @@ func (g cfGen) caseOf() cfCase {
 		if isFloat || g.chance(0.3) || math.IsNaN(f) {
 			set("missing_value", f, pyFloat(f))
 		} else {
-			set("missing_value", int64(f), pyInt(int64(f)))
+			set("missing_value", satInt64(f), pyInt(satInt64(f)))
 		}
 	}
 	if g.chance(0.3) {

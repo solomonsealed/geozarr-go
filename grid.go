@@ -390,6 +390,9 @@ func declaredAs(attrs map[string]any, uuid, name string) bool {
 		return false
 	}
 	for _, d := range list {
+		if a, ok := d.(Attrs); ok {
+			d = a.Map()
+		}
 		if m, ok := d.(map[string]any); ok && (m["uuid"] == uuid || m["name"] == name) {
 			return true
 		}

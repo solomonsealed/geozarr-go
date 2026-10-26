@@ -1,9 +1,15 @@
-// Package icechunksrc reads GeoZarr datasets from Icechunk repositories,
-// with icechunk-go: a session's snapshot is a geozarr.Source.
+// Package icechunksrc reads and writes GeoZarr datasets in Icechunk
+// repositories, with icechunk-go: a session's snapshot is a
+// geozarr.Source, and a writable session takes datasets as
+// icechunk.xarray.to_icechunk writes them.
 //
 //	repo, _ := icechunk.Open(ctx, storage, nil)
 //	session, _ := repo.ReadonlySession(ctx, icechunk.AtBranch("main"))
 //	ds, _ := icechunksrc.Open(ctx, session, "")
+//
+//	w, _ := repo.WritableSession(ctx, "main")
+//	_ = icechunksrc.Write(ctx, w, "", spec, nil)
+//	_, _ = w.Commit(ctx, "a dataset", nil)
 package icechunksrc
 
 import (

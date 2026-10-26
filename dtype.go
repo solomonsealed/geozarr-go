@@ -61,7 +61,7 @@ func (d dtype) String() string {
 // zarrType returns the zarr-go data type of d, for decoded arrays.
 func (d dtype) zarrType() (zarr.DataType, error) {
 	switch d.kind {
-	case 'b', 'i', 'u', 'f':
+	case 'b', 'i', 'u', 'f', 'c':
 		return zarr.ParseDataType(d.String())
 	case 'M':
 		return zarr.Datetime64(d.unit, 1), nil

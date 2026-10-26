@@ -35,6 +35,16 @@ func normalize(v any) (any, error) {
 			out[k] = n
 		}
 		return out, nil
+	case Attrs:
+		out := make(map[string]any, len(x))
+		for _, a := range x {
+			n, err := normalize(a.Value)
+			if err != nil {
+				return nil, err
+			}
+			out[a.Key] = n
+		}
+		return out, nil
 	case []any:
 		out := make([]any, len(x))
 		for i, e := range x {

@@ -134,6 +134,20 @@ def op_cm_insert(req):
 
 
 @op
+def op_cm_insert_ordered(req):
+    """insert, on attributes and data given as JSON text (keeping their
+    order), returning the result as JSON text."""
+    mod = convention(req["convention"])
+    attrs, data = json.loads(req["attrs"]), json.loads(req["data"])
+    if req["convention"] == "multiscales":
+        data = data["multiscales"]
+    kwargs = {"overwrite": req.get("overwrite", False)}
+    if req.get("revision"):
+        kwargs["revision"] = req["revision"]
+    return json.dumps(mod.insert(attrs, data, **kwargs))
+
+
+@op
 def op_cm_extract(req):
     mod = convention(req["convention"])
     remaining, data = mod.extract(req["attrs"], revision=req.get("revision"))
@@ -602,6 +616,302 @@ def op_crs_transform(req):
     direction = pyproj.enums.TransformDirection.INVERSE if req.get("inverse") else pyproj.enums.TransformDirection.FORWARD
     x, y = t.transform(pts[:, 0], pts[:, 1], direction=direction, errcheck=False)
     return {"points": [[finite_or_none(a), finite_or_none(b)] for a, b in zip(np.atleast_1d(x), np.atleast_1d(y))], "pipeline": t.definition}
+
+
+# ---------------------------------------------------------------------------
+# Writing datasets (xarray.Dataset.to_zarr)
+
+
+def wire_values(w):
+    """Values in the wire format, as xarray holds them in memory: strings
+    as fixed-width or object arrays, cftime dates as objects."""
+    if "strings" in w:
+        if w["dtype"] in ("object", "|O", "O"):
+            # Variable-length strings, as xarray decodes Zarr string arrays.
+            from xarray.coding.strings import create_vlen_dtype
+
+            return np.array(w["strings"], dtype=create_vlen_dtype(str)).reshape(w["shape"])
+        return np.array(w["strings"], dtype=w["dtype"]).reshape(w["shape"])
+    if "dates" in w:
+        import cftime
+
+        flat = [cftime.datetime(*d, calendar=w["calendar"], has_year_zero=w.get("has_year_zero", False)) for d in w["dates"]]
+        out = np.empty(len(flat), dtype=object)
+        out[:] = flat
+        return out.reshape(w["shape"])
+    return from_wire(w)
+
+
+def ordered(pairs):
+    return {k: attr_value(v) for k, v in pairs}
+
+
+def encoding_value(k, v):
+    if k in ("chunks", "shards") and isinstance(v, list):
+        return tuple(v)
+    if k in ("compressors", "filters") and isinstance(v, list):
+        return [dict(c) for c in v]
+    return attr_value(v)
+
+
+def build_dataset(spec):
+    import xarray as xr
+
+    data_vars, coords = {}, {}
+    for v in spec["variables"]:
+        var = xr.Variable(v["dims"], wire_values(v["data"]), ordered(v["attrs"]))
+        var.encoding = {k: encoding_value(k, x) for k, x in v["encoding"].items()}
+        (coords if v["coord"] else data_vars)[v["name"]] = var
+    return xr.Dataset(data_vars, coords=coords, attrs=ordered(spec["attrs"]))
+
+
+def describe_store(path, group=None):
+    """The metadata documents, chunk keys (with a hash of each chunk) and
+    each array's stored values."""
+    import hashlib
+    import os
+
+    import zarr
+
+    docs, chunks = {}, {}
+    for root, _, files in os.walk(path):
+        for f in files:
+            full = os.path.join(root, f)
+            key = os.path.relpath(full, path).replace(os.sep, "/")
+            data = open(full, "rb").read()
+            if f in ("zarr.json", ".zarray", ".zattrs", ".zgroup", ".zmetadata"):
+                docs[key] = data.decode()
+            else:
+                chunks[key] = hashlib.sha256(data).hexdigest()
+    arrays = {}
+    root = zarr.open_group(path, path="" if group in (None, "*") else group, mode="r", use_consolidated=False)
+    # Every group's arrays, by path, when describing the whole store.
+    members = root.members(max_depth=None) if group == "*" else root.arrays()
+    for name, arr in members:
+        if not isinstance(arr, zarr.Array):
+            continue
+        values = arr[...]
+        if arr.dtype.kind in "SU":
+            values = np.asarray(values, dtype=arr.dtype)  # 0-d reads drop the width
+        arrays[name] = to_wire(values)
+    return {"docs": docs, "chunks": chunks, "arrays": arrays}
+
+
+@op
+def op_write_georef(req):
+    """Builds a dataset, applies rioxarray's write_crs and write_transform
+    as listed, and writes it with to_zarr."""
+    import shutil
+
+    shutil.rmtree(req["path"], ignore_errors=True)
+    ds = georeference(build_dataset(req["dataset"]), req["steps"])
+    ds.to_zarr(req["path"], **{k: v for k, v in req.get("options", {}).items() if v is not None})
+    return describe_store(req["path"])
+
+
+def georeference(ds, steps):
+    """rioxarray's write_crs and write_transform, applied as listed."""
+    import rioxarray  # noqa: F401
+    from affine import Affine
+    from rioxarray.enum import Convention
+
+    for step in steps:
+        kw = {"grid_mapping_name": step.get("grid_mapping")}
+        if step.get("zarr"):
+            kw["convention"] = Convention.ZARR
+        if step["op"] == "write_crs":
+            crs = crs_of(step["crs"]) if isinstance(step["crs"], dict) else step["crs"]
+            ds = ds.rio.write_crs(crs, **kw)
+        else:
+            ds = ds.rio.write_transform(Affine(*step["transform"]), **kw)
+    return ds
+
+
+def pyramid_of(ds, req):
+    """A multiscales pyramid of ds as geozarr-go builds one: levels
+    coarsened with xarray (rioxarray's write_transform rescaling stored
+    transforms), and the group's attributes inserted with zarr-cm."""
+    import rioxarray  # noqa: F401
+    from affine import Affine
+    from rioxarray.enum import Convention
+    from zarr_cm import multiscales, proj as proj_cm, spatial
+
+    n, f, method = req["levels"], req.get("factor") or 2, req.get("resampling") or "nearest"
+    if n < 1 or f < 2 or method not in ("nearest", "average"):
+        raise ValueError(f"bad pyramid options {n}, {f}, {method}")
+    ydim, xdim = ds.rio.y_dim, ds.rio.x_dim
+    for name, v in ds.variables.items():
+        averaged = method == "average" or name in ds.coords
+        if averaged and {ydim, xdim} & set(v.dims) and v.dtype.kind not in "iuf":
+            raise TypeError(f"cannot average {name} of {v.dtype}")
+    for i in range(1, n):
+        if ds.sizes[ydim] // f**i == 0 or ds.sizes[xdim] // f**i == 0:
+            raise ValueError(f"pyramid level {i} would be empty")
+    try:
+        bbox = [float(b) for b in ds.rio.bounds()]
+        transforms = [ds.rio.transform()]
+    except Exception:
+        transforms = None
+
+    def centre(x, axis):
+        idx = [slice(None)] * x.ndim
+        for a in axis:
+            idx[a] = f // 2
+        return x[tuple(idx)]
+
+    levels = [ds]
+    for i in range(1, n):
+        c = levels[-1].coarsen({ydim: f, xdim: f}, boundary="trim")
+        lvl = c.mean() if method == "average" else c.reduce(centre)
+        if transforms is not None:
+            t = transforms[-1] * Affine.scale(f)
+            transforms.append(t)
+            gm = lvl.rio.grid_mapping
+            if gm in lvl.coords and "GeoTransform" in lvl[gm].attrs:
+                lvl = lvl.rio.write_transform(t)
+            if "spatial:transform" in lvl.attrs:
+                lvl = lvl.rio.write_transform(t, convention=Convention.ZARR)
+        levels.append(lvl)
+
+    layout = []
+    for i, lvl in enumerate(levels):
+        e = {"asset": str(i)}
+        if i:
+            e["derived_from"] = str(i - 1)
+            e["transform"] = {"scale": [float(f), float(f)], "translation": [0.0, 0.0]}
+        if transforms is not None:
+            e["spatial:transform"] = [float(v) for v in list(transforms[i])[:6]]
+            e["spatial:shape"] = [lvl.sizes[ydim], lvl.sizes[xdim]]
+        layout.append(e)
+    attrs = multiscales.insert(ordered(req.get("attrs") or []), multiscales.create(layout=layout, resampling_method=method))
+    if transforms is not None:
+        attrs = spatial.insert(attrs, {"spatial:dimensions": [ydim, xdim], "spatial:bbox": bbox, "spatial:registration": "pixel"})
+        p = {k: ds.attrs[k] for k in PROJ_KEYS if k in ds.attrs}
+        if not p:
+            gm = ds.rio.grid_mapping
+            if gm in ds.coords:
+                a = ds[gm].attrs
+                wkt = a["crs_wkt"] if "crs_wkt" in a else a.get("spatial_ref")
+                if isinstance(wkt, str):
+                    p = {"proj:wkt2": wkt}
+        if p:
+            attrs = proj_cm.insert(attrs, p)
+    return attrs, levels
+
+
+def join_group(path, name):
+    return f"{path}/{name}" if path else name
+
+
+@op
+def op_write_pyramid(req):
+    """A pyramid (pyramid_of), its group and levels written with to_zarr."""
+    import shutil
+
+    import xarray as xr
+
+    shutil.rmtree(req["path"], ignore_errors=True)
+    ds = georeference(build_dataset(req["dataset"]), req.get("steps") or [])
+    attrs, levels = pyramid_of(ds, req)
+    o = {k: v for k, v in req.get("options", {}).items() if v is not None}
+    mode, fmt, consolidated = o.get("mode", "w-"), o.get("zarr_format"), o.get("consolidated")
+    xr.Dataset(attrs=attrs).to_zarr(req["path"], mode=mode, zarr_format=fmt, consolidated=False)
+    for i, lvl in enumerate(levels):
+        last = i == len(levels) - 1
+        lvl.to_zarr(req["path"], group=str(i), mode="w-", zarr_format=fmt, consolidated=consolidated if last else False)
+    return describe_store(req["path"], "*")
+
+
+# ---------------------------------------------------------------------------
+# Writing to Icechunk (icechunk.xarray.to_icechunk)
+
+
+def describe_icechunk(path):
+    """describe_store for the main branch of an Icechunk repository, with
+    the messages of its commits."""
+    import hashlib
+
+    import icechunk
+    import zarr
+    from zarr.core.buffer import default_buffer_prototype
+    from zarr.core.sync import sync
+
+    icechunk.set_logs_filter("error")
+    repo = icechunk.Repository.open(icechunk.local_filesystem_storage(path))
+    store = repo.readonly_session(branch="main").store
+
+    async def keys():
+        return sorted([k async for k in store.list()])
+
+    docs, chunks = {}, {}
+    for k in sync(keys()):
+        data = sync(store.get(k, prototype=default_buffer_prototype())).to_bytes()
+        if k == "zarr.json" or k.endswith("/zarr.json"):
+            docs[k] = data.decode()
+        else:
+            chunks[k] = hashlib.sha256(data).hexdigest()
+    arrays = {}
+    for name, arr in zarr.open_group(store, mode="r").members(max_depth=None):
+        if isinstance(arr, zarr.Array):
+            values = arr[...]
+            if arr.dtype.kind in "SU":
+                values = np.asarray(values, dtype=arr.dtype)
+            arrays[name] = to_wire(values)
+    messages = [snap.message for snap in repo.ancestry(branch="main")]
+    return {"docs": docs, "chunks": chunks, "arrays": arrays, "messages": messages}
+
+
+@op
+def op_write_icechunk(req):
+    """Writes a dataset (or a pyramid of it) to a new Icechunk repository
+    with to_icechunk, commits it, and describes the repository."""
+    import shutil
+
+    import icechunk
+    import xarray as xr
+    from icechunk.xarray import to_icechunk
+
+    shutil.rmtree(req["path"], ignore_errors=True)
+    icechunk.set_logs_filter("error")
+    repo = icechunk.Repository.create(icechunk.local_filesystem_storage(req["path"]))
+    session = repo.writable_session("main")
+    ds = georeference(build_dataset(req["dataset"]), req.get("steps") or [])
+    group, mode = req.get("group") or "", req.get("mode")
+    if req.get("pyramid"):
+        attrs, levels = pyramid_of(ds, req["pyramid"])
+        to_icechunk(xr.Dataset(attrs=attrs), session, group=group or None, mode=mode or "w-")
+        for i, lvl in enumerate(levels):
+            to_icechunk(lvl, session, group=join_group(group, str(i)), mode="w-")
+    else:
+        to_icechunk(ds, session, group=group or None, mode=mode or None)
+    session.commit(req["message"])
+    return describe_icechunk(req["path"])
+
+
+@op
+def op_describe_icechunk(req):
+    """Describes a repository (one Go wrote) as icechunk-python reads it."""
+    return describe_icechunk(req["path"])
+
+
+@op
+def op_write_dataset(req):
+    import shutil
+
+    if req.get("fresh", True):
+        shutil.rmtree(req["path"], ignore_errors=True)
+    ds = build_dataset(req["dataset"])
+    o = req.get("options", {})
+    kw = {}
+    for k in ("mode", "zarr_format", "consolidated", "append_dim"):
+        if o.get(k) is not None:
+            kw[k] = o[k]
+    if o.get("region"):
+        kw["region"] = {d: slice(a, b) for d, (a, b) in o["region"].items()}
+    if req.get("group"):
+        kw["group"] = req["group"]
+    ds.to_zarr(req["path"], **kw)
+    return describe_store(req["path"], req.get("group"))
 
 
 # ---------------------------------------------------------------------------

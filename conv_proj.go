@@ -113,16 +113,19 @@ func (p *Proj) IsZero() bool {
 }
 
 // Data returns p as convention data, with only the properties set.
-func (p Proj) Data() map[string]any {
-	out := map[string]any{}
+func (p Proj) Data() map[string]any { return plainJSON(p.Attrs()).(map[string]any) }
+
+// Attrs returns p as convention data in zarr-cm's key order.
+func (p Proj) Attrs() Attrs {
+	var out Attrs
 	if p.Code != "" {
-		out["proj:code"] = p.Code
+		out.Set("proj:code", p.Code)
 	}
 	if p.WKT2 != "" {
-		out["proj:wkt2"] = p.WKT2
+		out.Set("proj:wkt2", p.WKT2)
 	}
 	if p.PROJJSON != nil {
-		out["proj:projjson"] = cloneJSON(p.PROJJSON)
+		out.Set("proj:projjson", cloneJSON(p.PROJJSON))
 	}
 	return out
 }
