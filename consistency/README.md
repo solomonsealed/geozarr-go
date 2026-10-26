@@ -1,11 +1,13 @@
 # Consistency with the Python geospatial stack
 
 The tests in this directory check that geozarr-go and the Python libraries
-it reimplements agree on everything they both support: xarray (CF decoding,
-`open_zarr`, `sel`), pandas, cftime, zarr-cm (the Zarr conventions), pyproj
-and PROJ (coordinate reference systems), rioxarray, rasterio and GDAL (grid
-georeferencing), and icechunk-python (Icechunk repositories). The versions are
-pinned in `requirements.txt`.
+it reimplements agree on everything they both support: xarray (CF decoding
+and encoding, `open_zarr`, `to_zarr`, `sel`, `coarsen`), pandas, cftime,
+NumPy and zarr-python, zarr-cm (the Zarr conventions), pyproj and PROJ
+(coordinate reference systems), rioxarray, rasterio and GDAL (grid
+georeferencing, read and written), and icechunk-python (Icechunk
+repositories, read and committed to). The versions are pinned in
+`requirements.txt`.
 
 They drive Python through `oracle.py`, a small JSON-lines server. Each test
 applies the same operation with both implementations, often to random cases,
@@ -17,6 +19,9 @@ and requires that:
   decoded values (bit for bit, including NaN payloads and the rounding of
   scaled floats), dates, dimensions, attributes and encodings, index
   positions, and clip windows;
+- **written stores are identical**: every metadata document byte for byte,
+  the same chunk keys, the same chunk bytes (except zstd and gzip, below),
+  and the same stored values;
 - **coordinates agree to 1e-6 m** (1e-9° for geographic coordinates) after
   transformation, forward and inverse. GDAL and PROJ are built with
   fused multiply-adds and Go projects with its own code, so they differ in
@@ -30,10 +35,10 @@ python3.13 -m venv .venv
 GEOZARR_PYTHON=.venv/bin/python go test ./consistency/
 ```
 
-A run takes about two and a half minutes and ends with a summary line, e.g.
+A run takes about four minutes and ends with a summary line, e.g.
 
 ```
-consistency (live): 3588 CF grid mapping points, 78768 CRS points transformed, 7 Icechunk datasets, 58500 attribute operations, 1600 clip boxes, 3 datasets refused, 14496 documents validated, 4568 grid properties, 9 known xarray issues, 1600 rowcol points, 1191 selections, 272 transformed bounds, 96 variables compared, 3000 variables decoded
+consistency (live): 3588 CF grid mapping points, 78768 CRS points transformed, 110 Icechunk commits written, 7 Icechunk datasets, 58500 attribute operations, 1600 clip boxes, 3 datasets refused, 153 datasets written, 14496 documents validated, 221 georeferenced datasets written, 4568 grid properties, 10 known xarray issues, 360 ordered inserts, 197 pyramids written, 1600 rowcol points, 1190 selections, 272 transformed bounds, 96 variables compared, 3000 variables decoded, 300 write steps compared
 ```
 
 The random tests take `-geozarr.cases=N` and `-geozarr.seed=S` for longer
@@ -42,7 +47,7 @@ compares three public Icechunk repositories (dynamical.org's GFS forecast,
 ERA5 from WeatherBench 2, and GLAD land cover) over the network.
 
 Without `GEOZARR_PYTHON`, the tests replay recordings of Python's answers
-(`testdata/recordings`, 6 MB, keyed by a hash of each request) and of the
+(`testdata/recordings`, 8 MB, keyed by a hash of each request) and of the
 stores Python wrote (`testdata/stores`), in a few seconds. Datasets Go writes
 are written again, in memory. Re-record after changing a test:
 
@@ -50,12 +55,17 @@ are written again, in memory. Re-record after changing a test:
 GEOZARR_PYTHON=.venv/bin/python go test ./consistency/ -geozarr.record
 ```
 
-The recordings were made on macOS on arm64, and live runs belong there too:
-the reference libraries round differently on other platforms. NumPy's
-float-to-integer casts saturate on arm64 (x86 gives the minimum integer).
-`numpy.linalg.solve` with Accelerate multiplies by reciprocals. GDAL's
-densified bounds use fused multiply-adds, which decide which side of the
-equator a point near it falls on.
+The recordings replay on any platform (CI replays them on Linux x86-64): the
+tests generate the same cases everywhere, avoiding what differs by
+architecture (multiply-adds Go fuses on arm64 only, `math` functions' last
+bits, conversions of floats out of range), and rounding the coordinates
+they project with Go. They were made on macOS on arm64, and live runs
+belong there too: the reference libraries round differently on other
+platforms. NumPy's float-to-integer casts saturate on arm64 (x86 gives the
+minimum integer), and Go follows arm64. `numpy.linalg.solve` with
+Accelerate multiplies by reciprocals. GDAL's densified bounds use fused
+multiply-adds, which decide which side of the equator a point near it
+falls on.
 
 ## What is covered
 
@@ -70,6 +80,12 @@ equator a point near it falls on.
 | `TestGrids` | rioxarray on random datasets Go writes: spatial dimensions (by name, CF attributes or `spatial:dimensions`), the CRS (grid mapping, `proj:*`, `crs`), stored transforms (`GeoTransform`, `spatial:transform` including node registration, `transform`), `transform`, `resolution` and `bounds` with and without `recalc`, and the windows `clip_box` selects (boxes in the grid's CRS or in longitude and latitude, `auto_expand`, one-dimensional windows), with rioxarray's errors. |
 | `TestTransformBounds`, `TestRowCol` | rasterio's `transform_bounds` (GDAL's, with densified edges, the antimeridian and poles) between random boxes of common CRSs, and `rowcol` of random transforms. |
 | `TestIcechunkDatasets` | The v3 datasets of `TestDatasets`, written to Icechunk repositories by xarray and icechunk-python, read by Go through `icechunksrc`. |
+| `TestConventionInsertOrdered` | zarr-cm's `insert` into attributes and data with keys in random orders: the same JSON text, keys in the same order. |
+| `TestWriteDatasets` | `Dataset.to_zarr` of random datasets, Zarr v2 and v3, at the root and in subgroups: every NumPy type and cftime dates, random attributes, and random encodings (CF: units, calendars, `dtype`, `scale_factor`, `add_offset`, `_FillValue`, `missing_value`, `_Unsigned`, `coordinates`; Zarr: chunks, shards, codecs, fill values), and datasets both refuse. |
+| `TestWriteAppend` | Appending along a dimension and writing regions (modes `a`, `a-`, `r+`) to stores written before, step by step. |
+| `TestWriteGeoreferencing` | rioxarray's `write_crs` and `write_transform` (the CF convention and `Convention.ZARR`, named grid mappings) on random datasets, with built-in codes and CF grid mappings of every kind, then `to_zarr`. |
+| `TestWritePyramids` | Multiscales pyramids of random datasets (floats over many magnitudes with NaN and infinities, every integer type, regular, irregular and integer coordinates, extra dimensions), `nearest` and `average`, factors 2 to 12, with random georeferencing: levels as xarray's `coarsen` computes them, the group's attributes as zarr-cm inserts them, written with `to_zarr`. |
+| `TestWriteIcechunk` | Datasets and pyramids written to new Icechunk repositories and committed, by `icechunksrc` and by `icechunk.xarray.to_icechunk`: the same nodes, chunks and values. icechunk-python also reads Go's repository, and finds what it finds in its own. |
 | `TestPublicIcechunk` | (opt-in) Public Icechunk repositories: structure, grid and clip windows. |
 
 ## Where Go and Python differ on purpose
@@ -105,6 +121,18 @@ them, and each place is commented in the tests:
 - **A CRS that PROJ reads but cannot project with** (exact UTM parameters on a
   sphere, say) also reads in Go, and its transformations fail
   (`CRS.Err`).
+- **zstd and gzip compress differently**: Go's compressors are not libzstd
+  and zlib. Chunks with those codecs are compared by their decoded values;
+  every other codec (including blosc, Zarr v2's default) writes the same
+  bytes.
+- **The pyramid recipe is geozarr-go's.** No Python library builds GeoZarr
+  pyramids from datasets in a standard way (zarr-cm and geozarr-toolkit
+  write only the metadata), so the oracle builds them with the same recipe
+  from xarray's `coarsen`, rioxarray's `write_transform` and zarr-cm's
+  `insert` (`pyramid_of`), and the tests hold Go to it. Its averages are
+  NumPy's `nanmean`, whose last bits depend on the order NumPy's iterator
+  adds in (pairwise within the innermost run of a window, axes of length 1
+  dropped and contiguous ones merged), which Go follows.
 
 ## Wire format
 

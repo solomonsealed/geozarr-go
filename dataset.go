@@ -327,7 +327,7 @@ func decodeFillValue(v any, dt zarr.DataType) (any, error) {
 			if math.IsNaN(f) || math.IsInf(f, 0) {
 				return nil, fmt.Errorf("failed to decode _FillValue %v", v)
 			}
-			return normalize(int64(math.Trunc(f)))
+			return normalize(castInt64(math.Trunc(f)))
 		case v == true:
 			return int64(1), nil
 		case v == false:

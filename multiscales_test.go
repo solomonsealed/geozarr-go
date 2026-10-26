@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"testing"
 
@@ -175,5 +176,88 @@ func TestAffine(t *testing.T) {
 	}
 	if _, _, err := (Affine{1, 2, 0, 2, 4, 0}).RowCol(1, 1); err == nil {
 		t.Error("singular RowCol succeeded")
+	}
+}
+
+// A pyramid written with BuildPyramid reads back with the multiscales
+// reader: each level's grid, from the layout and from its own
+// georeferencing, is the base grid coarsened.
+func TestPyramidRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	x := make([]float64, 8)
+	y := make([]float64, 6)
+	for i := range x {
+		x[i] = 500005 + 10*float64(i)
+	}
+	for i := range y {
+		y[i] = 4999995 - 10*float64(i)
+	}
+	v := make([]float32, 48)
+	for i := range v {
+		v[i] = float32(i)
+	}
+	xs, _ := zarr.FromSlice([]uint64{8}, x)
+	ys, _ := zarr.FromSlice([]uint64{6}, y)
+	vs, _ := zarr.FromSlice([]uint64{6, 8}, v)
+	ds := &DatasetSpec{Variables: []*VariableSpec{
+		{Name: "x", Dims: []string{"x"}, Data: &Data{Values: xs}},
+		{Name: "y", Dims: []string{"y"}, Data: &Data{Values: ys}},
+		{Name: "b02", Dims: []string{"y", "x"}, Data: &Data{Values: vs}},
+	}}
+	if err := ds.WriteCRS(mustCode(t, "EPSG:32633"), nil); err != nil {
+		t.Fatal(err)
+	}
+	p, err := BuildPyramid(ds, &PyramidOptions{Levels: 3, Resampling: "average"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := zarr.NewMemoryStore()
+	if err := p.Write(ctx, store, "pyramid", nil); err != nil {
+		t.Fatal(err)
+	}
+	root, err := Open(ctx, StoreSource(store), "pyramid")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := root.Multiscales()
+	if err != nil || m == nil || len(m.Layout) != 3 {
+		t.Fatalf("Multiscales: %+v, %v", m, err)
+	}
+	for i, want := range []struct {
+		res           float64
+		width, height int
+	}{{10, 8, 6}, {20, 4, 3}, {40, 2, 1}} {
+		l, err := m.LevelFor(want.res)
+		if err != nil || l.Asset != fmt.Sprint(i) {
+			t.Fatalf("LevelFor(%g) = %+v, %v", want.res, l, err)
+		}
+		level, err := root.OpenLevel(ctx, *l)
+		if err != nil {
+			t.Fatal(err)
+		}
+		g, err := level.Grid(ctx, "b02")
+		if err != nil {
+			t.Fatal(err)
+		}
+		tr, err := g.Transform(false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if g.Width != want.width || g.Height != want.height || tr != (Affine{want.res, 0, 500000, 0, -want.res, 5000000}) {
+			t.Errorf("level %d: %dx%d, transform %v", i, g.Width, g.Height, tr)
+		}
+		if crs, err := g.CRS(); err != nil || crs == nil || !sameCRS(crs, mustCode(t, "EPSG:32633")) {
+			t.Errorf("level %d: CRS %v, %v", i, crs, err)
+		}
+	}
+	// The second level's first cell is the mean of the base's first 2×2.
+	level, _ := root.OpenLevel(ctx, m.Layout[1])
+	d, err := level.Variables["b02"].Read(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, _ := d.Float64s()
+	if f[0] != (0+1+8+9)/4.0 {
+		t.Errorf("level 1 b02[0, 0] = %g", f[0])
 	}
 }

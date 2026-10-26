@@ -46,18 +46,18 @@ func pointsIn(r *rand.Rand, b []float64, n int) [][2]float64 {
 		e += 360
 	}
 	shrink := func(lo, hi float64) (float64, float64) {
-		d := (hi - lo) * 0.01
+		d := float64((hi - lo) * 0.01)
 		return lo + d, hi - d
 	}
 	w, e = shrink(w, e)
 	s, nn = shrink(s, nn)
 	out := make([][2]float64, n)
 	for i := range out {
-		lon := w + r.Float64()*(e-w)
+		lon := w + float64(r.Float64()*(e-w))
 		if lon > 180 {
 			lon -= 360
 		}
-		out[i] = [2]float64{lon, s + r.Float64()*(nn-s)}
+		out[i] = [2]float64{lon, s + float64(r.Float64()*(nn-s))}
 	}
 	return out
 }
@@ -235,7 +235,7 @@ func (g cfGridGen) ellipsoid(attrs map[string]any) {
 	}
 }
 
-func (g cfGridGen) uniform(lo, hi float64) float64 { return lo + g.r.Float64()*(hi-lo) }
+func (g cfGridGen) uniform(lo, hi float64) float64 { return lo + float64(g.r.Float64()*(hi-lo)) }
 
 // mapping returns a grid mapping and the region of its points.
 func (g cfGridGen) mapping() (map[string]any, []float64) {

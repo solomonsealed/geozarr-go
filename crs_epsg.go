@@ -111,6 +111,6 @@ func CRSFromCode(code string) (*CRS, error) {
 	if err != nil {
 		return nil, err
 	}
-	c.Code, c.Name = key, name
+	c.Code, c.Name, c.fromCode = key, name, key
 	return c, nil
 }

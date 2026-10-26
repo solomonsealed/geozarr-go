@@ -505,3 +505,95 @@ func decodeJSON(doc []byte, v *any) error {
 	*v = n
 	return nil
 }
+
+// declarationOrder is the key order of zarr-cm's declarations.
+var declarationOrder = []string{"uuid", "schema_url", "spec_url", "name", "description"}
+
+// orderedDeclaration returns a declaration in zarr-cm's key order.
+func orderedDeclaration(d Declaration) Attrs {
+	var out Attrs
+	for _, k := range declarationOrder {
+		if v, ok := d[k]; ok {
+			out = append(out, Attr{k, v})
+		}
+	}
+	rest := map[string]any{}
+	for k, v := range d {
+		if !slices.Contains(declarationOrder, k) {
+			rest[k] = v
+		}
+	}
+	return append(out, AttrsOf(rest)...)
+}
+
+// plainJSON returns v with Attrs as maps, for comparisons.
+func plainJSON(v any) any {
+	switch x := v.(type) {
+	case Attrs:
+		m := make(map[string]any, len(x))
+		for _, a := range x {
+			m[a.Key] = plainJSON(a.Value)
+		}
+		return m
+	case []any:
+		out := make([]any, len(x))
+		for i, e := range x {
+			out[i] = plainJSON(e)
+		}
+		return out
+	}
+	return v
+}
+
+// InsertAttrs is Insert on attributes in order, ordered as zarr-cm's
+// insert orders its result: attrs, then the data's new keys (existing
+// keys keep their place), the declarations in place (or last), existing
+// declarations as they were and the convention's in zarr-cm's key order.
+func (c *Convention) InsertAttrs(attrs, data Attrs, label string, overwrite bool) (Attrs, error) {
+	plainAttrs, _ := plainJSON(attrs).(map[string]any)
+	plainData, _ := plainJSON(data).(map[string]any)
+	if _, err := c.Insert(plainAttrs, plainData, label, overwrite); err != nil {
+		return nil, err
+	}
+	r, err := c.revision(label)
+	if err != nil {
+		return nil, err
+	}
+	out := attrs.Clone()
+	for _, kv := range data {
+		out.Set(kv.Key, kv.Value)
+	}
+	existing, _ := attrs.Get("zarr_conventions")
+	decls, _ := existing.([]any)
+	decls = slices.Clone(decls)
+	extra, _ := data.Get("zarr_conventions")
+	el, _ := extra.([]any)
+	for _, e := range el {
+		if !slices.ContainsFunc(decls, func(d any) bool { return pyEqual(plainJSON(d), plainJSON(e)) }) {
+			decls = append(decls, e)
+		}
+	}
+	cmo := map[string]any(r.declaration)
+	known := map[string]string{}
+	for u, l := range r.recognized {
+		known[u] = l
+	}
+	var merged []any
+	replaced := false
+	for _, d := range decls {
+		dm, _ := plainJSON(d).(map[string]any)
+		if pyEqual(dm, cmo) || Declaration(dm).declares(c.UUID, known) {
+			if !replaced {
+				merged = append(merged, orderedDeclaration(r.declaration))
+				replaced = true
+			}
+			continue
+		}
+		merged = append(merged, d)
+	}
+	if !replaced {
+		merged = append(merged, orderedDeclaration(r.declaration))
+	}
+	out.Set("zarr_conventions", merged)
+	return out, nil
+}

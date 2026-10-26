@@ -1,28 +1,30 @@
 # geozarr-go
 
-Read geospatial Zarr datasets (GeoZarr) in Go, the way the Python stack
-reads them. It builds on [zarr-go](https://github.com/solomonsealed/zarr-go),
+Read and write geospatial Zarr datasets (GeoZarr) in Go, the way the Python
+stack does. It builds on [zarr-go](https://github.com/solomonsealed/zarr-go),
 which handles the Zarr format, and covers the geospatial layers above it:
 
 - **datasets** opened as `xarray.open_zarr` opens them, with CF decoding
   (masks, scale and offset, times in every CF calendar) and label-based
-  selection (`sel`);
+  selection (`sel`), and written as `Dataset.to_zarr` writes them, byte for
+  byte;
 - **the Zarr conventions** GeoZarr builds on (`proj`, `spatial`,
   `multiscales`), read, validated and written as zarr-cm does;
 - **coordinate reference systems** from EPSG codes, WKT, PROJJSON, PROJ
   strings and CF grid mappings, with PROJ's projections;
 - **grid georeferencing** as rioxarray does it: spatial dimensions, CRS,
-  affine transform, bounds, and `clip_box`;
+  affine transform, bounds, and `clip_box`, read, and written as
+  `write_crs` and `write_transform` write them;
 - **multiscales** pyramids: opening levels and choosing one for a
-  resolution;
-- **Icechunk** repositories, through
+  resolution, and building and writing pyramids;
+- **Icechunk** repositories, read and committed to, through
   [icechunk-go](https://github.com/solomonsealed/icechunk-go).
 
 It is pure Go, with no PROJ or GDAL.
 
 Every one of these is checked against the Python libraries it reimplements
-(xarray, pandas, cftime, zarr-cm, pyproj, rioxarray, rasterio and
-icechunk-python), on random cases and on public datasets. See
+(xarray, pandas, cftime, NumPy, zarr-python, zarr-cm, pyproj, rioxarray,
+rasterio and icechunk-python), on random cases and on public datasets. See
 [consistency](consistency/README.md).
 
 ```sh
@@ -87,6 +89,36 @@ st := httpstore.NewS3(storage.S3Config{
 repo, err := icechunk.Open(ctx, st, nil)
 session, err := repo.ReadonlySession(ctx, icechunk.AtBranch("main"))
 ds, err := icechunksrc.Open(ctx, session, "")
+```
+
+Writing:
+
+```go
+x, _ := zarr.FromSlice([]uint64{4}, []float64{500005, 500015, 500025, 500035})
+y, _ := zarr.FromSlice([]uint64{2}, []float64{4999995, 4999985})
+b02, _ := zarr.FromSlice([]uint64{2, 4}, []float64{0.1, 0.12, 0.09, 0.11, 0.1, 0.13, 0.12, 0.08})
+ds := &geozarr.DatasetSpec{
+	Attrs: geozarr.NewAttrs("title", "Sentinel-2 B02"),
+	Variables: []*geozarr.VariableSpec{
+		{Name: "x", Dims: []string{"x"}, Data: &geozarr.Data{Values: x}},
+		{Name: "y", Dims: []string{"y"}, Data: &geozarr.Data{Values: y}},
+		{Name: "b02", Dims: []string{"y", "x"}, Data: &geozarr.Data{Values: b02},
+			Encoding: map[string]any{"dtype": "uint16", "scale_factor": 0.0001, "_FillValue": 0}},
+	},
+}
+utm, _ := geozarr.CRSFromCode("EPSG:32633")
+err = ds.WriteCRS(utm, nil) // a spatial_ref grid mapping, as rioxarray's write_crs
+err = geozarr.Write(ctx, zarr.NewLocalStore("b02.zarr"), "", ds, nil) // as ds.to_zarr("b02.zarr")
+
+// A multiscales pyramid: levels "0", "1" and "2", each averaging 2×2 cells
+// of the one before.
+p, err := geozarr.BuildPyramid(ds, &geozarr.PyramidOptions{Levels: 3, Resampling: "average"})
+err = p.Write(ctx, zarr.NewLocalStore("b02-pyramid.zarr"), "", nil)
+
+// To Icechunk, as icechunk.xarray.to_icechunk writes, then committed.
+w, err := repo.WritableSession(ctx, "main")
+err = icechunksrc.Write(ctx, w, "", ds, nil)
+snapshot, err := w.Commit(ctx, "Sentinel-2 B02", nil)
 ```
 
 ## Features
@@ -200,12 +232,68 @@ multiscales group's CRS and dimensions, and the level's `spatial:transform`.
 than a resolution. Cell sizes come from each level's transform, or from
 scales composed along `derived_from`.
 
+### Writing
+
+`Write` writes a `DatasetSpec` (variables with their decoded values,
+attributes in order, and encodings) as `Dataset.to_zarr` (xarray 2026.9,
+zarr-python 3.4) writes it:
+
+- every metadata document byte for byte, Zarr v3 and v2: attributes,
+  `coordinates` attributes, dimension names, fill values;
+- CF encoding as xarray's coders do it: datetimes and timedeltas to numbers
+  (pandas' choice of units, or cftime's in other calendars), `scale_factor`
+  and `add_offset`, `_FillValue` and `missing_value` masks, `_Unsigned`, and
+  casts to an encoding's `dtype` with NumPy's promotion, rounding and
+  casting rules;
+- chunks: zarr-python's default chunk shapes, or the encoding's chunks and
+  shards, and its default codecs, or the encoding's, writing the same
+  chunks;
+- the modes `w-`, `w`, `a`, `a-` and `r+`, appending along a dimension and
+  writing regions, and consolidated metadata.
+
+`DatasetSpec.WriteCRS` and `WriteTransform` record georeferencing as
+rioxarray's `write_crs` and `write_transform` do: in a CF grid mapping
+variable (`crs_wkt`, `spatial_ref`, the CF parameters and `GeoTransform`),
+or with `GeoOptions{Zarr: true}` as the proj and spatial conventions'
+attributes. CRSs from built-in codes are written with the WKT GDAL writes
+for them; CRSs from CF grid mappings as pyproj exports them.
+
+`Convention.InsertAttrs` inserts a convention's properties into ordered
+attributes as zarr-cm's `insert` does, keeping its key order.
+
+`BuildPyramid` builds a multiscales pyramid of a dataset:
+
+- each level coarsens the one before by a factor along the spatial
+  dimensions, as `Dataset.coarsen(..., boundary="trim")` reduces them:
+  `"average"` takes NumPy's mean (to the bit, NaN left out), `"nearest"`
+  the cell at the centre of each window;
+- stored transforms (`GeoTransform`, `spatial:transform`) are rescaled;
+- the group's attributes lay the levels out (`"0"`, `"1"`, ...) with the
+  multiscales convention, each level's `spatial:transform` and
+  `spatial:shape`, and the dataset's spatial and proj properties.
+
+`Pyramid.Write` writes the group and its levels.
+
+`icechunksrc.Write` and `icechunksrc.WritePyramid` write to an Icechunk
+session as `icechunk.xarray.to_icechunk` does (Zarr v3, no consolidated
+metadata). Commit the session with icechunk-go: icechunk-python reads the
+commits.
+
 ## Limitations
 
-- **Read-only datasets.** Writing goes through zarr-go, and the conventions'
-  attributes come from `Convention.Attributes` and `Insert`.
-- **Not all of xarray.** There is no arithmetic, alignment, grouping or
-  resampling. The goal is reading data the way xarray would hand it to you.
+- **Not all of xarray.** There is no arithmetic, alignment or grouping; the
+  only resampling is a pyramid's. The goal is reading data the way xarray
+  would hand it to you, and writing what `to_zarr` would write.
+- **Values are written from memory.** There is no lazy (Dask-style)
+  writing: write large datasets a region or an append at a time.
+- **zstd and gzip compress differently** from zarr-python's (Go's
+  compressors are not libzstd and zlib): the chunks decode to the same
+  values. Other codecs write the same bytes.
+- **CRSs are written from built-in codes and CF grid mappings.** Others
+  (from WKT or PROJJSON, say) are refused with `ErrUnsupported`.
+- **A pyramid is one recipe.** GeoZarr does not say how levels are
+  computed: `BuildPyramid` coarsens by an integer factor, dropping the cells
+  left over at the edges, with nearest or average resampling.
 - **Datum shifts are not applied.** Transformations between CRSs go through
   their geographic coordinates, as PROJ's ballpark transformations do. The
   error is a few metres at most between WGS 84, NAD83 and ETRS89, but can

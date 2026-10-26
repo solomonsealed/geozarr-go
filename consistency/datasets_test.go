@@ -218,7 +218,7 @@ func (g selGen) near(v any) any {
 		if math.IsNaN(x) {
 			return x
 		}
-		return x + g.r.NormFloat64()*3
+		return x + float64(normal(g.r)*3)
 	case int64:
 		return x + int64(g.pick(5)) - 2
 	case time.Time:

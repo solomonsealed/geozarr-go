@@ -33,10 +33,12 @@ type CRS struct {
 	toMeter  float64
 	over     bool
 
-	pp   *projParams
-	proj projection
-	rot  *obTran
-	err  error // why the projection cannot be set up
+	pp       *projParams
+	proj     projection
+	rot      *obTran
+	err      error          // why the projection cannot be set up
+	fromCode string         // the built-in code it was made from, if so
+	cf       map[string]any // the CF grid mapping parameters it was made from, if so
 }
 
 // ErrOutsideDomain is wrapped by errors for coordinates a projection

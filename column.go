@@ -430,6 +430,17 @@ func (c *column) ndarray(shape []uint64) (*zarr.NDArray, error) {
 				binary.LittleEndian.PutUint64(data[8*k:], math.Float64bits(v))
 			}
 		}
+	case 'c':
+		half := c.dt.size / 2
+		for k, v := range c.c {
+			if half == 4 {
+				binary.LittleEndian.PutUint32(data[8*k:], math.Float32bits(float32(real(v))))
+				binary.LittleEndian.PutUint32(data[8*k+4:], math.Float32bits(float32(imag(v))))
+			} else {
+				binary.LittleEndian.PutUint64(data[16*k:], math.Float64bits(real(v)))
+				binary.LittleEndian.PutUint64(data[16*k+8:], math.Float64bits(imag(v)))
+			}
+		}
 	default:
 		return nil, fmt.Errorf("geozarr: cannot store %s values", c.dt)
 	}
