@@ -229,10 +229,11 @@ third-party archives.
    limitations under the License.
 
 --------------------------------------------------------------------------
-rioxarray (https://github.com/corteva/rioxarray), Apache License 2.0
+rioxarray (https://github.com/vylor/rioxarray), Apache License 2.0
 (the text of which is above)
 --------------------------------------------------------------------------
 
+   Copyright (c) 2019-2026, Vylor™
    Copyright (c) 2019-2025, Corteva Agriscience™
    All rights reserved.
 

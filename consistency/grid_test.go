@@ -17,7 +17,7 @@ import (
 	zarr "github.com/solomonsealed/zarr-go"
 )
 
-// The grid tests compare Go's georeferencing with rioxarray's (0.23) for
+// The grid tests compare Go's georeferencing with rioxarray's (0.24) for
 // random datasets that Go writes: spatial dimensions, CRS, transform,
 // resolution and bounds, and the windows clip_box selects. rioxarray
 // reads the proj and spatial conventions from an array's own attributes,

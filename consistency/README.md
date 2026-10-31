@@ -47,7 +47,7 @@ compares three public Icechunk repositories (dynamical.org's GFS forecast,
 ERA5 from WeatherBench 2, and GLAD land cover) over the network.
 
 Without `GEOZARR_PYTHON`, the tests replay recordings of Python's answers
-(`testdata/recordings`, 8 MB, keyed by a hash of each request) and of the
+(`testdata/recordings`, 7 MB, keyed by a hash of each request) and of the
 stores Python wrote (`testdata/stores`), in a few seconds. Datasets Go writes
 are written again, in memory. Re-record after changing a test:
 

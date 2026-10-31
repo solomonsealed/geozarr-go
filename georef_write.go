@@ -10,7 +10,7 @@ import (
 	zarr "github.com/solomonsealed/zarr-go"
 )
 
-// Writing georeferencing as rioxarray (0.23) does: write_crs,
+// Writing georeferencing as rioxarray (0.24) does: write_crs,
 // write_transform and write_grid_mapping, by default with the CF
 // convention (a grid mapping variable), optionally with the Zarr proj and
 // spatial conventions.
