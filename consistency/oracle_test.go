@@ -102,7 +102,6 @@ func (l *live) call(line []byte) ([]byte, error) {
 type pyError struct {
 	Message string `json:"error"`
 	Type    string `json:"type"`
-	Trace   string `json:"trace"`
 }
 
 func (e *pyError) Error() string { return "python: " + e.Message }
