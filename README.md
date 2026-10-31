@@ -207,7 +207,7 @@ edges, the antimeridian and poles.
 
 ### Georeferencing
 
-`Dataset.Grid` finds a variable's georeferencing as rioxarray (0.23) does:
+`Dataset.Grid` finds a variable's georeferencing as rioxarray (0.24) does:
 
 - spatial dimensions by name, by CF attributes or by `spatial:dimensions`;
 - the CRS from a CF grid mapping, from `proj:wkt2`, `proj:code` or

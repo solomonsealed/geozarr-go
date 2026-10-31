@@ -42,7 +42,7 @@ var (
 // A Grid is the georeferencing of a variable: which of its dimensions are
 // X and Y, its coordinate reference system and its affine transform.
 //
-// They are found as rioxarray (0.23) finds them for the variable as a
+// They are found as rioxarray (0.24) finds them for the variable as a
 // DataArray of xarray.open_zarr, with the spatial and proj conventions
 // applying from the group to its arrays as the conventions say:
 //

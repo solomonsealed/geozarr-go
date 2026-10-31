@@ -1,10 +1,10 @@
 github.com/google/flatbuffers v25.12.19+incompatible h1:haMV2JRRJCe1998HeW/p0X9UaMTK6SDo0ffLn2+DbLs=
 github.com/google/flatbuffers v25.12.19+incompatible/go.mod h1:1AeVuKshWv4vARoZatz6mlQ0JxURH0Kv5+zNeJKJCa8=
-github.com/klauspost/compress v1.20.1 h1:T7kKElXUMXrUJ2E9QhQhxFtcK5rPyLdsGZvdbLMPdiQ=
-github.com/klauspost/compress v1.20.1/go.mod h1:LUdAzn7YLVvxLpc7y3V1m40wESHTgc1422pwwBSKYuI=
-github.com/solomonsealed/icechunk-go v0.0.0-20261025095305-f5a4d784d4c1 h1:l0rnzqL+Va5sVoW4sq6b8s5DZMsopeSiH8/dXLB2Rss=
-github.com/solomonsealed/icechunk-go v0.0.0-20261025095305-f5a4d784d4c1/go.mod h1:zszWU1zB14WTufHwlna/PT4HXKPVW52yo3ErcyE+4YQ=
-github.com/solomonsealed/zarr-go v0.0.0-20261023225440-787ff97f9e9b h1:1X4XZC8E2Z8iSBsfS8K9X22PHMXWRxNtKXQTMWGSZM8=
-github.com/solomonsealed/zarr-go v0.0.0-20261023225440-787ff97f9e9b/go.mod h1:poMf25iWXE72QJDa3I7knhAXLTKuOaHwzZ0+G8WQNuM=
+github.com/klauspost/compress v1.20.3 h1:zWNoFqq/lSuYQRim3dUXlXeA0IqwuZGicdG5ZTfY5j4=
+github.com/klauspost/compress v1.20.3/go.mod h1:LUdAzn7YLVvxLpc7y3V1m40wESHTgc1422pwwBSKYuI=
+github.com/solomonsealed/icechunk-go v0.0.0-20261031050305-30cb86f78b45 h1:scjkK50NzYdHdP563eesV50CnrVMSfV9O5/IHuFk1wA=
+github.com/solomonsealed/icechunk-go v0.0.0-20261031050305-30cb86f78b45/go.mod h1:Vo+gH1bLEMYEAOZnAnJiGJIEv52tqTcNpnEqO6JMm6k=
+github.com/solomonsealed/zarr-go v0.0.0-20261031053404-f45e6850e792 h1:aB5tFPbKMaTxLSScHuqmFiqPLspEprqgfO+5LQgEYco=
+github.com/solomonsealed/zarr-go v0.0.0-20261031053404-f45e6850e792/go.mod h1:4pjc+YuimaOr93HlQzFVC9xMZ2brc49gg6ViMYus7u8=
 github.com/ulikunitz/xz v0.5.17 h1:flR0y/x1hgM8EGV1AW3Xll6T413G0glV8UfBwR617V4=
 github.com/ulikunitz/xz v0.5.17/go.mod h1:H9Rt/W6/Qj27PGauhQc6nfCDy7vHpzsOThBSaYDoEhw=

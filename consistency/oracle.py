@@ -13,7 +13,6 @@ it can also be driven by hand:
 import base64
 import json
 import sys
-import traceback
 import warnings
 
 warnings.simplefilter("ignore")
@@ -1095,7 +1094,7 @@ def main():
                 break
             res = {"ok": OPS[req["op"]](req)}
         except Exception as e:  # report every failure to the caller
-            res = {"error": f"{type(e).__name__}: {e}", "type": type(e).__name__, "trace": traceback.format_exc(limit=4)}
+            res = {"error": f"{type(e).__name__}: {e}", "type": type(e).__name__}
         sys.stdout.write(json.dumps(res) + "\n")
         sys.stdout.flush()
 
